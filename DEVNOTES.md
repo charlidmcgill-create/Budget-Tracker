@@ -25,9 +25,9 @@ Primary focus: clean architecture and real-world workflows.
 ---
 
 ## In Progress
-- Backend setup
-  - Express server
-  - Basic health check route
+- Database Setup
+    - initialize PostgreSQL
+    - create tables
 
 ---
 
@@ -51,9 +51,16 @@ Primary focus: clean architecture and real-world workflows.
 2. Add `/health` route
 3. Connect PostgreSQL
 4. Design transactions schema
+5. CSV imports
+6. Authentication setup
+    6a. User login validation
+    6b. New user registration
+7. Design frontend UI
 
 ---
 
 ## Ideas / Future Features
 - Recurring transactions
 - Budget alerts
+
+
