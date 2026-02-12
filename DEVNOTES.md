@@ -47,8 +47,8 @@ Primary focus: clean architecture and real-world workflows.
 ---
 
 ## Next Steps
-1. Set up Express server
-2. Add `/health` route
+1. Set up Express server - done
+2. Add `/health` route - done
 3. Connect PostgreSQL
 4. Design transactions schema
 5. CSV imports
