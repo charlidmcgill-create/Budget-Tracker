@@ -26,7 +26,7 @@ Build a full-stack budget tracking app with:
 3. Connect PostgreSQL - done
 4. Design transactions schema - done
 5. CSV imports - done
-6. Authentication setup
+6. Authentication setup - done
     6a. User login validation
     6b. New user registration
 7. Design frontend UI
