@@ -20,10 +20,24 @@ app.use(errorHandler);
 export default app;
 
 //POST /auth/login
-
+app.post("/auth/login", (req, res) => {
+    const { username, password } = req.body;
+    
+    // Logic to authenticate user and generate token
+    if (username === "user" && password === "pass") {
+        res.json({ token: "fake-jwt-token" });
+    } else {
+        res.status(401).json({ error: "Invalid credentials" });
+    }
+});
 
 //POST /auth/register
-
+app.post("/auth/register", (req, res) => {
+    const { username, password } = req.body;
+    
+    // Logic to register a new user
+    res.json({ message: "User registered successfully", username });
+});
 
 //POST /imports
 app.post("/imports", upload.single('file'), (req, res) => {
