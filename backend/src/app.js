@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import healthRoutes from "./routes/health.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { verifyToken } from "./middleware/authMiddleware.js";
 import { config } from "./config/env.js";
 import pool from "./db/index.js";
 import fs from "fs";
@@ -9,6 +10,8 @@ import path from "path";
 import { fileURLToPath } from "url";
 import multer from "multer";
 import csv from "csv-parser";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -24,27 +27,89 @@ app.use(errorHandler);
 export default app;
 
 //POST /auth/login
-app.post("/auth/login", (req, res) => {
-    const { username, password } = req.body;
-    
-    // Logic to authenticate user and generate token
-    if (username === "user" && password === "pass") {
-        res.json({ token: "fake-jwt-token" });
-    } else {
-        res.status(401).json({ error: "Invalid credentials" });
+app.post("/auth/login", async (req, res) => {
+    try {
+        const { username, password } = req.body;
+
+        // Validate input
+        if (!username || !password) {
+            return res.status(400).json({ error: "Username and password are required" });
+        }
+
+        // Find user in database
+        const result = await pool.query('SELECT id, username, password_hash FROM users WHERE username = $1', [username]);
+        
+        if (result.rows.length === 0) {
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
+
+        const user = result.rows[0];
+
+        // Verify password
+        const passwordMatch = await bcrypt.compare(password, user.password_hash);
+        if (!passwordMatch) {
+            return res.status(401).json({ error: "Invalid credentials" });
+        }
+
+        // Generate JWT token
+        const token = jwt.sign({ id: user.id, username: user.username }, config.jwtSecret, { expiresIn: '24h' });
+
+        res.json({ token, user: { id: user.id, username: user.username } });
+    } catch (error) {
+        res.status(500).json({ error: "Login failed", details: error.message });
     }
 });
 
 //POST /auth/register
-app.post("/auth/register", (req, res) => {
-    const { username, password } = req.body;
-    
-    // Logic to register a new user
-    res.json({ message: "User registered successfully", username });
+app.post("/auth/register", async (req, res) => {
+    try {
+        const { username, email, password, confirmPassword } = req.body;
+
+        // Validate input
+        if (!username || !email || !password || !confirmPassword) {
+            return res.status(400).json({ error: "All fields are required" });
+        }
+
+        if (password !== confirmPassword) {
+            return res.status(400).json({ error: "Passwords do not match" });
+        }
+
+        if (password.length < 8) {
+            return res.status(400).json({ error: "Password must be at least 8 characters" });
+        }
+
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        if (!emailRegex.test(email)) {
+            return res.status(400).json({ error: "Invalid email format" });
+        }
+
+        // Check if user already exists
+        const existingUser = await pool.query('SELECT id FROM users WHERE username = $1 OR email = $2', [username, email]);
+        if (existingUser.rows.length > 0) {
+            return res.status(409).json({ error: "Username or email already exists" });
+        }
+
+        // Hash password
+        const saltRounds = 10;
+        const passwordHash = await bcrypt.hash(password, saltRounds);
+
+        // Create user
+        const result = await pool.query(
+            'INSERT INTO users (username, email, password_hash) VALUES ($1, $2, $3) RETURNING id, username, email',
+            [username, email, passwordHash]
+        );
+
+        const newUser = result.rows[0];
+        const token = jwt.sign({ id: newUser.id, username: newUser.username }, config.jwtSecret, { expiresIn: '24h' });
+
+        res.status(201).json({ message: "User registered successfully", token, user: { id: newUser.id, username: newUser.username, email: newUser.email } });
+    } catch (error) {
+        res.status(500).json({ error: "Registration failed", details: error.message });
+    }
 });
 
 //POST /imports
-app.post("/imports", upload.single('file'), async (req, res) => {
+app.post("/imports", verifyToken, upload.single('file'), async (req, res) => {
     try {
         if (!req.file) {
             return res.status(400).json({ error: "No file uploaded" });
@@ -89,7 +154,7 @@ app.post("/imports", upload.single('file'), async (req, res) => {
 });
 
 //POST /transactions/batch  
-app.post("/transactions/batch", async (req, res) => {
+app.post("/transactions/batch", verifyToken, async (req, res) => {
     try {
         const transactions = req.body.transactions;
         
@@ -113,7 +178,7 @@ app.post("/transactions/batch", async (req, res) => {
 });
 
 //GET /transactions
-app.get("/transactions", async (req, res) => { 
+app.get("/transactions", verifyToken, async (req, res) => { 
     try {
         const result = await pool.query('SELECT id, date, amount, category, description FROM transactions ORDER BY date DESC');
         res.json(result.rows);
@@ -123,7 +188,7 @@ app.get("/transactions", async (req, res) => {
 });
 
 //GET /summary/monthly
-app.get("/summary/monthly", async (req, res) => {
+app.get("/summary/monthly", verifyToken, async (req, res) => {
     try {
         const { year, month } = req.query;
         
@@ -162,7 +227,7 @@ app.get("/summary/monthly", async (req, res) => {
 });
 
 //PUT /transactions/:id
-app.put("/transactions/:id", async (req, res) => {
+app.put("/transactions/:id", verifyToken, async (req, res) => {
     try {
         const transactionId = req.params.id;
         const { date, amount, category, description } = req.body;
@@ -183,7 +248,7 @@ app.put("/transactions/:id", async (req, res) => {
 });
 
 //DELETE /transactions/:id
-app.delete("/transactions/:id", async (req, res) => {
+app.delete("/transactions/:id", verifyToken, async (req, res) => {
     try {
         const transactionId = req.params.id;
         

@@ -11,7 +11,7 @@ Build a full-stack budget tracking app with:
 - Frontend: React
 - Backend: Node.js + Express
 - Database: PostgreSQL
-- Auth: 
+- Auth: JWT
 ---
 
 ## Current Issues/Questions
