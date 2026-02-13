@@ -1,6 +1,9 @@
 import express from "express";
+import cors from "cors";
 import healthRoutes from "./routes/health.js";
 import { errorHandler } from "./middleware/errorHandler.js";
+import { config } from "./config/env.js";
+import pool from "./db/index.js";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -11,6 +14,7 @@ const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const upload = multer({ dest: path.join(__dirname, 'uploads') });
 
+app.use(cors());
 app.use(express.json());
 
 app.use("/health", healthRoutes);
@@ -40,128 +44,157 @@ app.post("/auth/register", (req, res) => {
 });
 
 //POST /imports
-app.post("/imports", upload.single('file'), (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: "No file uploaded" });
-    }
+app.post("/imports", upload.single('file'), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: "No file uploaded" });
+        }
 
-    const filePath = req.file.path;
-    const transactions = [];
+        const filePath = req.file.path;
+        const transactions = [];
 
-    fs.createReadStream(filePath)
-        .pipe(csv())
-        .on('data', (row) => {
-            transactions.push({
-                id: row.id || Date.now().toString(),
-                date: row.date,
-                amount: parseFloat(row.amount),
-                category: row.category,
-                description: row.description
+        fs.createReadStream(filePath)
+            .pipe(csv())
+            .on('data', (row) => {
+                transactions.push({
+                    date: row.date,
+                    amount: parseFloat(row.amount),
+                    category: row.category,
+                    description: row.description
+                });
+            })
+            .on('end', async () => {
+                try {
+                    for (const transaction of transactions) {
+                        await pool.query(
+                            'INSERT INTO transactions (date, amount, category, description) VALUES ($1, $2, $3, $4)',
+                            [transaction.date, transaction.amount, transaction.category, transaction.description]
+                        );
+                    }
+
+                    // Clean up uploaded file
+                    fs.unlinkSync(filePath);
+
+                    res.json({ message: "CSV imported successfully", count: transactions.length });
+                } catch (error) {
+                    res.status(500).json({ error: "Failed to insert transactions", details: error.message });
+                }
+            })
+            .on('error', (error) => {
+                res.status(500).json({ error: "Failed to process CSV", details: error.message });
             });
-        })
-        .on('end', () => {
-            // Read existing transactions
-            const dataPath = path.join(__dirname, 'transactions.json');
-            let existingTransactions = [];
-            if (fs.existsSync(dataPath)) {
-                const data = fs.readFileSync(dataPath, 'utf-8');
-                existingTransactions = JSON.parse(data);
-            }
-
-            // Merge and save
-            const updatedTransactions = existingTransactions.concat(transactions);
-            fs.writeFileSync(dataPath, JSON.stringify(updatedTransactions, null, 2));
-
-            // Clean up uploaded file
-            fs.unlinkSync(filePath);
-
-            res.json({ message: "CSV imported successfully", count: transactions.length });
-        })
-        .on('error', (error) => {
-            res.status(500).json({ error: "Failed to process CSV", details: error.message });
-        });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to upload file", details: error.message });
+    }
 });
 
 //POST /transactions/batch  
-app.post("/transactions/batch", (req, res) => {
-    const transactions = req.body.transactions;
-    
-    // Logic to save the batch of transactions to the database
-    const data = fs.readFileSync(path.join(__dirname, 'transactions.json'), 'utf-8');
-    const existingTransactions = JSON.parse(data);
-    const updatedTransactions = existingTransactions.concat(transactions);
-    fs.writeFileSync(path.join(__dirname, 'transactions.json'), JSON.stringify(updatedTransactions, null, 2));
+app.post("/transactions/batch", async (req, res) => {
+    try {
+        const transactions = req.body.transactions;
+        
+        if (!Array.isArray(transactions) || transactions.length === 0) {
+            return res.status(400).json({ error: "transactions must be a non-empty array" });
+        }
 
-    res.json({ message: "Batch of transactions has been saved", transactions });
+        const results = [];
+        for (const transaction of transactions) {
+            const result = await pool.query(
+                'INSERT INTO transactions (date, amount, category, description) VALUES ($1, $2, $3, $4) RETURNING id, date, amount, category, description',
+                [transaction.date, transaction.amount, transaction.category, transaction.description]
+            );
+            results.push(result.rows[0]);
+        }
+
+        res.json({ message: "Batch of transactions has been saved", count: results.length, transactions: results });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to save transactions", details: error.message });
+    }
 });
 
 //GET /transactions
-app.get("/transactions", (req, res) => { 
-    // Logic to fetch transactions from the database
-    const data = fs.readFileSync(path.join(__dirname, 'transactions.json'), 'utf-8');
-    const transactions = JSON.parse(data);
-    res.json(transactions);
+app.get("/transactions", async (req, res) => { 
+    try {
+        const result = await pool.query('SELECT id, date, amount, category, description FROM transactions ORDER BY date DESC');
+        res.json(result.rows);
+    } catch (error) {
+        res.status(500).json({ error: "Failed to fetch transactions", details: error.message });
+    }
 });
 
 //GET /summary/monthly
-app.get("/summary/monthly", (req, res) => {
-    const { year, month } = req.query;
-    const data = fs.readFileSync(path.join(__dirname, 'transactions.json'), 'utf-8');
-    let transactions = JSON.parse(data);
-    
-    // Filter by specific month if parameters provided
-    if (year && month) {
-        transactions = transactions.filter(transaction => {
-            const date = new Date(transaction.date);
-            return date.getFullYear() === parseInt(year) && 
-                   (date.getMonth() + 1) === parseInt(month);
-        });
+app.get("/summary/monthly", async (req, res) => {
+    try {
+        const { year, month } = req.query;
         
-        const summary = { income: 0, expenses: 0 };
-        transactions.forEach(transaction => {
-            if (transaction.amount > 0) {
-                summary.income += transaction.amount;
-            } else {
-                summary.expenses += Math.abs(transaction.amount);
-            }
-        });
-        res.json(summary);
-    } else {
-        // If no month specified, return summary for all months
-        const monthlySummary = transactions.reduce((summary, transaction) => {
-            const month = new Date(transaction.date).toLocaleString('default', { month: 'long', year: 'numeric' });
-            if (!summary[month]) {
-                summary[month] = { income: 0, expenses: 0 };
-            }
-            if (transaction.amount > 0) {
-                summary[month].income += transaction.amount;
-            } else {
-                summary[month].expenses += Math.abs(transaction.amount);
-            }
-            return summary;
-        }, {});
-        res.json(monthlySummary);
+        if (year && month) {
+            // Get summary for specific month
+            const result = await pool.query(
+                `SELECT 
+                    SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income,
+                    SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses
+                FROM transactions
+                WHERE EXTRACT(YEAR FROM date) = $1 AND EXTRACT(MONTH FROM date) = $2`,
+                [year, month]
+            );
+            const summary = result.rows[0];
+            res.json({ income: summary.income || 0, expenses: summary.expenses || 0 });
+        } else {
+            // Get summary for all months
+            const result = await pool.query(
+                `SELECT 
+                    TO_CHAR(date, 'Month YYYY') as month,
+                    SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as income,
+                    SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as expenses
+                FROM transactions
+                GROUP BY TO_CHAR(date, 'Month YYYY')
+                ORDER BY MIN(date) DESC`
+            );
+            const monthlySummary = {};
+            result.rows.forEach(row => {
+                monthlySummary[row.month] = { income: row.income || 0, expenses: row.expenses || 0 };
+            });
+            res.json(monthlySummary);
+        }
+    } catch (error) {
+        res.status(500).json({ error: "Failed to fetch summary", details: error.message });
     }
 });
 
 //PUT /transactions/:id
-app.put("/transactions/:id", (req, res) => {
-    const transactionId = req.params.id;
-    const updatedData = req.body;
-    
-    // Logic to update the transaction in the database using transactionId and updatedData
-    res.json({ message: `Transaction with ID ${transactionId} has been updated`, updatedData });
+app.put("/transactions/:id", async (req, res) => {
+    try {
+        const transactionId = req.params.id;
+        const { date, amount, category, description } = req.body;
+        
+        const result = await pool.query(
+            'UPDATE transactions SET date = COALESCE($1, date), amount = COALESCE($2, amount), category = COALESCE($3, category), description = COALESCE($4, description) WHERE id = $5 RETURNING *',
+            [date, amount, category, description, transactionId]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Transaction not found" });
+        }
+        
+        res.json({ message: `Transaction with ID ${transactionId} has been updated`, transaction: result.rows[0] });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to update transaction", details: error.message });
+    }
 });
 
 //DELETE /transactions/:id
-app.delete("/transactions/:id", (req, res) => {
-    const transactionId = req.params.id;
-    
-    // Logic to delete the transaction from the database using transactionId
-    const data = fs.readFileSync(path.join(__dirname, 'transactions.json'), 'utf-8');
-    let transactions = JSON.parse(data);
-    transactions = transactions.filter(transaction => transaction.id !== transactionId);
-    fs.writeFileSync(path.join(__dirname, 'transactions.json'), JSON.stringify(transactions, null, 2));
-
-    res.json({ message: `Transaction with ID ${transactionId} has been deleted` });
+app.delete("/transactions/:id", async (req, res) => {
+    try {
+        const transactionId = req.params.id;
+        
+        const result = await pool.query('DELETE FROM transactions WHERE id = $1 RETURNING id', [transactionId]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Transaction not found" });
+        }
+        
+        res.json({ message: `Transaction with ID ${transactionId} has been deleted` });
+    } catch (error) {
+        res.status(500).json({ error: "Failed to delete transaction", details: error.message });
+    }
 });
