@@ -17,6 +17,7 @@ Build a full-stack budget tracking app with:
 ## Current Issues/Questions
 - How to prevent duplicate transaction imports?
 - Best way to auto-categorize transactions?
+- More secure user-authentication?
 
 ---
 
