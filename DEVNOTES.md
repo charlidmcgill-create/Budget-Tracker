@@ -31,7 +31,7 @@ Build a full-stack budget tracking app with:
     6a. User login validation
     6b. New user registration
 7. Design frontend UI
-
+8. Test central 
 ---
 
 ## Ideas / Future Features

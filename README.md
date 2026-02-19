@@ -15,6 +15,10 @@ Full-stack budget tracker with REST API and CSV imports
 
 ## Tech Stack
 ### Frontend
+- hmtl
+- css
+- javascript
+
 ### Backend
 - Node.js
 - Express
